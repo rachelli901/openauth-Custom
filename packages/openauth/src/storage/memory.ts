@@ -61,10 +61,23 @@ export function MemoryStorage(input?: MemoryStorageOptions): StorageAdapter {
     }
   }
 
-  async function save() {
-    if (!input?.persist) return
-    const file = JSON.stringify(store)
-    await writeFile(input.persist, file)
+  let saveQueue = Promise.resolve()
+  let pendingSnapshot: string | undefined
+
+  function save() {
+    if (!input?.persist) return Promise.resolve()
+
+    pendingSnapshot = JSON.stringify(store)
+    saveQueue = saveQueue
+      .catch(() => {})
+      .then(async () => {
+        const snapshot = pendingSnapshot
+        pendingSnapshot = undefined
+        if (snapshot !== undefined) {
+          await writeFile(input.persist!, snapshot)
+        }
+      })
+    return saveQueue
   }
 
   function search(key: string) {

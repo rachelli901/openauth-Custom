@@ -1,5 +1,8 @@
 import { afterEach, setSystemTime } from "bun:test"
 import { beforeEach, describe, expect, test } from "bun:test"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { MemoryStorage } from "../src/storage/memory.js"
 
 let storage = MemoryStorage()
@@ -32,6 +35,38 @@ describe("set", () => {
     setSystemTime(Date.now() + 150)
     result = await storage.get(["temp", "key"])
     expect(result).toBeUndefined()
+  })
+
+  test("persist keeps the latest concurrent update", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openauth-storage-"))
+    const persist = join(directory, "storage.json")
+
+    try {
+      const persistedStorage = MemoryStorage({ persist })
+      const updates = 100
+      // A large first snapshot makes the out-of-order write race deterministic.
+      const initialPayload = "x".repeat(8 * 1024 * 1024)
+
+      await Promise.all([
+        persistedStorage.set(
+          ["concurrent", "key"],
+          { sequence: 0, payload: initialPayload },
+          new Date(Date.now() + 1_000),
+        ),
+        ...Array.from({ length: updates }, (_, index) =>
+          persistedStorage.set(
+            ["concurrent", "key"],
+            { sequence: index + 1 },
+            new Date(Date.now() + 1_000 + index),
+          ),
+        ),
+      ])
+
+      const persisted = JSON.parse(await readFile(persist, "utf8"))
+      expect(persisted[0][1].value).toEqual({ sequence: updates })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   test("nested", async () => {
